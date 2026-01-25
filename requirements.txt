@@ -1,0 +1,11 @@
+torch
+torchaudio
+
+speechbrain
+
+silero-vad
+
+numpy
+soundfile
+
+gradio
