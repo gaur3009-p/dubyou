@@ -9,3 +9,4 @@ numpy
 soundfile
 
 gradio
+faster-whisper
