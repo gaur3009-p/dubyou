@@ -1,104 +1,62 @@
-import gradio as gr
+
+---
+
+## 🟦 `app.py` (UI ONLY)
+
+```python
+import os
+import sys
 import numpy as np
-import torch
+import gradio as gr
+
+# Fix project root
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from services.voice_enrollment.prompts import VOICE_PROMPTS
-from services.voice_enrollment.vad import trim_silence
-from services.voice_enrollment.speaker_encoder import SpeakerEncoder
-from services.voice_enrollment.storage import save_profile
-
-
-encoder = SpeakerEncoder()
+from services.voice_enrollment.enrollment_service import enroll_user
 
 
 def enroll_voice(audio):
-    """
-    audio: (sample_rate, numpy_array)
-    """
     if audio is None:
-        return "❌ No audio received"
+        return "❌ No audio received."
 
     sr, audio_np = audio
 
-    # mono + float32
     if audio_np.ndim > 1:
         audio_np = audio_np.mean(axis=1)
 
     audio_np = audio_np.astype("float32")
 
-    # --- Silence trimming ---
-    clean_audio = trim_silence_from_np(audio_np, sr)
+    user_id = enroll_user(audio_np, sr)
 
-    if len(clean_audio) < sr * 5:
-        return "❌ Audio too short. Please speak clearly."
+    if user_id is None:
+        return "❌ Audio too short or invalid."
 
-    # --- Speaker embedding ---
-    embedding = encoder.encode(clean_audio)
-
-    # --- Save profile ---
-    user_id = save_profile(embedding, clean_audio)
-
-    return f"✅ Voice enrolled successfully!\n\n🆔 User ID:\n{user_id}"
-
-
-# --- Helper: NP-based VAD wrapper ---
-def trim_silence_from_np(audio_np, sr):
-    import torch
-    model, utils = torch.hub.load(
-        repo_or_dir="snakers4/silero-vad",
-        model="silero_vad",
-        trust_repo=True
-    )
-    (get_speech_timestamps, _, _, _, _) = utils
-
-    audio_tensor = torch.from_numpy(audio_np)
-    timestamps = get_speech_timestamps(
-        audio_tensor, model, sampling_rate=sr
+    return (
+        "✅ Voice enrolled successfully!\n\n"
+        f"🆔 USER ID:\n{user_id}\n\n"
+        "Save this ID — it will be used in all future phases."
     )
 
-    if not timestamps:
-        return audio_np
 
-    chunks = [
-        audio_tensor[t["start"]:t["end"]]
-        for t in timestamps
-    ]
-    return torch.cat(chunks).numpy()
-
-
-# ---------------- UI ----------------
-
-with gr.Blocks(title="Voice Enrollment") as demo:
-    gr.Markdown(
-        """
-        # 🎙️ Voice Enrollment (Phase 0)
-
-        Please **read the following sentences clearly**.
-        This will be used to **clone your voice later**.
-        """
-    )
+with gr.Blocks(title="DubYou — Voice Enrollment (Phase 0)") as demo:
+    gr.Markdown("# 🎙️ Voice Enrollment (Phase 0)")
+    gr.Markdown("### Please read the following sentences clearly:")
 
     for p in VOICE_PROMPTS:
-        gr.Markdown(f"• **{p}**")
+        gr.Markdown(f"- **{p}**")
 
     mic = gr.Audio(
         sources=["microphone"],
         type="numpy",
-        label="Record your voice (30–45 seconds)"
+        label="Record your voice (30–45 seconds recommended)"
     )
 
-    enroll_btn = gr.Button("🚀 Enroll My Voice")
+    btn = gr.Button("🚀 Enroll Voice")
+    out = gr.Textbox(lines=7)
 
-    output = gr.Textbox(
-        label="Enrollment Status",
-        lines=5
-    )
-
-    enroll_btn.click(
-        enroll_voice,
-        inputs=mic,
-        outputs=output
-    )
-
+    btn.click(enroll_voice, mic, out)
 
 demo.launch(share=True)
