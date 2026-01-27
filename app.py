@@ -1,9 +1,3 @@
-
----
-
-## 🟦 `app.py` (UI ONLY)
-
-```python
 import os
 import sys
 import numpy as np
