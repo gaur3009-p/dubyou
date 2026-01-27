@@ -16,6 +16,11 @@ def _load_vad():
 
 
 def trim_silence(audio_np, sr=16000):
+    if sr not in (8000, 16000):
+        raise ValueError(
+            f"Silero VAD requires 8k or 16k audio, got {sr}"
+        )
+
     model, utils = _load_vad()
     (get_speech_timestamps, _, _, _, _) = utils
 
