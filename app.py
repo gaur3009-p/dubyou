@@ -1,56 +1,68 @@
 import os
 import sys
-import numpy as np
 import gradio as gr
+import numpy as np
 
-# Fix project root
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from services.voice_enrollment.prompts import VOICE_PROMPTS
-from services.voice_enrollment.enrollment_service import enroll_user
+from services.asr.audio_buffer import AudioBuffer
+from services.asr.vad_gate import VadGate
+from services.asr.streaming_asr import StreamingASR
+from services.asr.phrase_committer import PhraseCommitter
+
+buffer = AudioBuffer()
+vad = VadGate()
+asr = StreamingASR()
+committer = PhraseCommitter()
+
+final_history = []
 
 
-def enroll_voice(audio):
+def live_asr(audio):
+    global final_history
+
     if audio is None:
-        return "❌ No audio received."
+        return "", " ".join(final_history)
 
-    sr, audio_np = audio
+    sr, chunk = audio
+    chunk = chunk.astype("float32")
 
-    if audio_np.ndim > 1:
-        audio_np = audio_np.mean(axis=1)
+    speech = vad.is_speech(chunk)
+    audio_np = buffer.add(chunk, sr)
 
-    audio_np = audio_np.astype("float32")
+    live_text = ""
+    if speech:
+        live_text = asr.transcribe(audio_np)
 
-    user_id = enroll_user(audio_np, sr)
+        committed = committer.process(live_text)
+        if committed:
+            final_history.append(committed)
 
-    if user_id is None:
-        return "❌ Audio too short or invalid."
+    if vad.is_silence_long():
+        buffer.buffer = buffer.buffer[:0]
 
-    return (
-        "✅ Voice enrolled successfully!\n\n"
-        f"🆔 USER ID:\n{user_id}\n\n"
-        "Save this ID — it will be used in all future phases."
-    )
+    return live_text, " ".join(final_history)
 
 
-with gr.Blocks(title="DubYou — Voice Enrollment (Phase 0)") as demo:
-    gr.Markdown("# 🎙️ Voice Enrollment (Phase 0)")
-    gr.Markdown("### Please read the following sentences clearly:")
-
-    for p in VOICE_PROMPTS:
-        gr.Markdown(f"- **{p}**")
+with gr.Blocks(title="Phase 1 — Streaming ASR") as demo:
+    gr.Markdown("# 🎙️ Phase 1 — Streaming ASR")
 
     mic = gr.Audio(
         sources=["microphone"],
         type="numpy",
-        label="Record your voice (30–45 seconds recommended)"
+        streaming=True,
+        label="Speak"
     )
 
-    btn = gr.Button("🚀 Enroll Voice")
-    out = gr.Textbox(lines=7)
+    live_txt = gr.Textbox(label="Live (Unstable)")
+    final_txt = gr.Textbox(label="Final (Committed)")
 
-    btn.click(enroll_voice, mic, out)
+    mic.stream(
+        live_asr,
+        inputs=mic,
+        outputs=[live_txt, final_txt]
+    )
 
 demo.launch(share=True)
