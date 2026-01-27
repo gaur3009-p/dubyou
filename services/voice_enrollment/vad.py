@@ -1,22 +1,37 @@
 import torch
-import numpy as np
 
-model, utils = torch.hub.load(
-    repo_or_dir="snakers4/silero-vad",
-    model="silero_vad",
-    trust_repo=True
-)
-(get_speech_timestamps, _, _, _, _) = utils
+_vad_model = None
+_vad_utils = None
 
-def trim_silence(audio_path, sr=16000):
-    import soundfile as sf
-    audio, _ = sf.read(audio_path)
-    audio = torch.from_numpy(audio).float()
 
-    timestamps = get_speech_timestamps(audio, model, sampling_rate=sr)
+def _load_vad():
+    global _vad_model, _vad_utils
+    if _vad_model is None:
+        _vad_model, _vad_utils = torch.hub.load(
+            "snakers4/silero-vad",
+            "silero_vad",
+            trust_repo=True
+        )
+    return _vad_model, _vad_utils
+
+
+def trim_silence(audio_np, sr=16000):
+    model, utils = _load_vad()
+    (get_speech_timestamps, _, _, _, _) = utils
+
+    audio_tensor = torch.from_numpy(audio_np)
+    timestamps = get_speech_timestamps(
+        audio_tensor,
+        model,
+        sampling_rate=sr
+    )
+
+    if not timestamps:
+        return audio_np
 
     chunks = [
-        audio[t["start"]:t["end"]] for t in timestamps
+        audio_tensor[t["start"]:t["end"]]
+        for t in timestamps
     ]
-    clean_audio = torch.cat(chunks)
-    return clean_audio.numpy()
+
+    return torch.cat(chunks).numpy()
