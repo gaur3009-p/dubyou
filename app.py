@@ -1,5 +1,6 @@
 # ============================================================
-# app.py — Unified App (Phase 0 + 1 + 2) [Improved UI]
+# app.py — Unified App (Phase 0 + Phase 1 + Phase 2)
+# STABLE Gradio Streaming Version
 # ============================================================
 
 import os
@@ -7,39 +8,44 @@ import sys
 import numpy as np
 import gradio as gr
 
+# ------------------------------------------------------------
+# Fix project root (Colab / Docker / Local safe)
+# ------------------------------------------------------------
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# -----------------------------
+# ------------------------------------------------------------
 # Phase 0 — Voice Enrollment
-# -----------------------------
+# ------------------------------------------------------------
 from services.voice_enrollment.prompts import VOICE_PROMPTS
 from services.voice_enrollment.enrollment_service import enroll_user
 
-# -----------------------------
+# ------------------------------------------------------------
 # Phase 1 — Streaming ASR
-# -----------------------------
+# ------------------------------------------------------------
 from services.asr.audio_buffer import AudioBuffer
 from services.asr.vad_gate import VadGate
 from services.asr.streaming_asr import StreamingASR
 from services.asr.phrase_committer import PhraseCommitter
 
-# -----------------------------
+# ------------------------------------------------------------
 # Phase 2 — Streaming Translation
-# -----------------------------
+# ------------------------------------------------------------
 from services.translation.translator import StreamingTranslator
 from services.translation.translation_buffer import TranslationBuffer
 
 
-# =========================
-# Phase 0 Logic
-# =========================
+# ============================================================
+# Phase 0 Logic — Voice Enrollment
+# ============================================================
 def phase0_enroll(audio):
     if audio is None:
         return "❌ No audio received."
 
     sr, audio_np = audio
+
+    # Convert to mono
     if audio_np.ndim > 1:
         audio_np = audio_np.mean(axis=1)
 
@@ -52,13 +58,13 @@ def phase0_enroll(audio):
     return (
         "✅ Voice enrolled successfully!\n\n"
         f"🆔 USER ID:\n{user_id}\n\n"
-        "This voice identity will be reused for translation & cloning."
+        "This voice identity will be reused in all next phases."
     )
 
 
-# =========================
-# Phase 1 + 2 Shared State
-# =========================
+# ============================================================
+# Phase 1 + Phase 2 Shared State
+# ============================================================
 buffer = AudioBuffer()
 vad = VadGate()
 asr = StreamingASR()
@@ -71,32 +77,43 @@ final_asr_history = []
 final_translation_history = []
 
 
+# ============================================================
+# Phase 1 + Phase 2 Pipeline
+# ============================================================
 def phase1_and_2_pipeline(audio, src_lang, tgt_lang):
     global final_asr_history, final_translation_history
 
+    # When stream resets
     if audio is None:
         return "", " ".join(final_asr_history), " ".join(final_translation_history)
 
     sr, chunk = audio
     chunk = chunk.astype("float32")
 
+    # VAD gate
     is_speech = vad.is_speech(chunk)
+
+    # Buffer audio (resample handled internally)
     audio_np = buffer.add(chunk, sr)
 
     live_text = ""
 
     if is_speech:
+        # Live ASR (unstable)
         live_text = asr.transcribe(audio_np)
 
+        # Commit logic
         committed = committer.process(live_text)
         if committed:
             final_asr_history.append(committed)
 
+            # Translate ONLY committed delta
             delta = translation_buffer.get_delta(" ".join(final_asr_history))
             if delta:
                 translated = translator.translate(delta, src_lang, tgt_lang)
                 final_translation_history.append(translated)
 
+    # Reset buffer after long silence
     if vad.is_silence_long():
         buffer.buffer = buffer.buffer[:0]
 
@@ -108,13 +125,13 @@ def phase1_and_2_pipeline(audio, src_lang, tgt_lang):
 
 
 # ============================================================
-# 🖥️ Unified UI (Interpreter-style)
+# 🖥️ Unified Gradio UI
 # ============================================================
 with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
     gr.Markdown(
         """
-        # 🌍 DubYou — Real-Time Multilingual Voice Translation  
-        **Speak in one language. Be understood in another.**
+        # 🌍 DubYou — Real-Time Multilingual Voice Platform  
+        **Speak naturally. Be understood instantly.**
         """
     )
 
@@ -135,7 +152,10 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
                 label="Record your voice (30–45 seconds)"
             )
 
-            enroll_out = gr.Textbox(lines=7, label="Enrollment Status")
+            enroll_out = gr.Textbox(
+                label="Enrollment Status",
+                lines=7
+            )
 
             gr.Button("Enroll Voice").click(
                 phase0_enroll,
@@ -144,10 +164,10 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
             )
 
         # =====================================================
-        # Phase 1 + 2 — Translation Interface
+        # Phase 1 + Phase 2 — Live Translation
         # =====================================================
         with gr.Tab("Phase 1 & 2 — Live Translation"):
-            gr.Markdown("### 🎧 Live Speech Translation")
+            gr.Markdown("### 🎧 Interpreter Mode")
 
             with gr.Row():
                 src = gr.Dropdown(
@@ -161,17 +181,19 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
                     label="👂 Listener Language"
                 )
 
+            # 🔑 CRITICAL: mic-only, in-memory streaming
             mic = gr.Audio(
                 sources=["microphone"],
                 type="numpy",
                 streaming=True,
+                format="wav",
                 label="🎙️ Speak here"
             )
 
             with gr.Row():
                 with gr.Column():
                     live_txt = gr.Textbox(
-                        label="📝 Live Speech (Unstable)",
+                        label="📝 Live ASR (Unstable)",
                         lines=4
                     )
 
