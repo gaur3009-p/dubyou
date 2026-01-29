@@ -1,5 +1,5 @@
 # ============================================================
-# app.py — Unified App (Phase 0 + Phase 1)
+# app.py — Unified App (Phase 0 + 1 + 2) [Improved UI]
 # ============================================================
 
 import os
@@ -7,26 +7,29 @@ import sys
 import numpy as np
 import gradio as gr
 
-# ------------------------------------------------------------
-# Fix project root
-# ------------------------------------------------------------
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# ------------------------------------------------------------
-# Phase 0 imports — Voice Enrollment
-# ------------------------------------------------------------
+# -----------------------------
+# Phase 0 — Voice Enrollment
+# -----------------------------
 from services.voice_enrollment.prompts import VOICE_PROMPTS
 from services.voice_enrollment.enrollment_service import enroll_user
 
-# ------------------------------------------------------------
-# Phase 1 imports — Streaming ASR
-# ------------------------------------------------------------
+# -----------------------------
+# Phase 1 — Streaming ASR
+# -----------------------------
 from services.asr.audio_buffer import AudioBuffer
 from services.asr.vad_gate import VadGate
 from services.asr.streaming_asr import StreamingASR
 from services.asr.phrase_committer import PhraseCommitter
+
+# -----------------------------
+# Phase 2 — Streaming Translation
+# -----------------------------
+from services.translation.translator import StreamingTranslator
+from services.translation.translation_buffer import TranslationBuffer
 
 
 # =========================
@@ -37,40 +40,42 @@ def phase0_enroll(audio):
         return "❌ No audio received."
 
     sr, audio_np = audio
-
     if audio_np.ndim > 1:
         audio_np = audio_np.mean(axis=1)
 
     audio_np = audio_np.astype("float32")
 
     user_id = enroll_user(audio_np, sr)
-
     if user_id is None:
         return "❌ Please speak clearly for at least 30 seconds."
 
     return (
         "✅ Voice enrolled successfully!\n\n"
         f"🆔 USER ID:\n{user_id}\n\n"
-        "This ID will be reused in all next phases."
+        "This voice identity will be reused for translation & cloning."
     )
 
 
 # =========================
-# Phase 1 Logic
+# Phase 1 + 2 Shared State
 # =========================
 buffer = AudioBuffer()
 vad = VadGate()
 asr = StreamingASR()
 committer = PhraseCommitter(min_words=5)
 
-final_history = []
+translator = StreamingTranslator()
+translation_buffer = TranslationBuffer()
+
+final_asr_history = []
+final_translation_history = []
 
 
-def phase1_streaming_asr(audio):
-    global final_history
+def phase1_and_2_pipeline(audio, src_lang, tgt_lang):
+    global final_asr_history, final_translation_history
 
     if audio is None:
-        return "", " ".join(final_history)
+        return "", " ".join(final_asr_history), " ".join(final_translation_history)
 
     sr, chunk = audio
     chunk = chunk.astype("float32")
@@ -79,34 +84,45 @@ def phase1_streaming_asr(audio):
     audio_np = buffer.add(chunk, sr)
 
     live_text = ""
+
     if is_speech:
         live_text = asr.transcribe(audio_np)
+
         committed = committer.process(live_text)
         if committed:
-            final_history.append(committed)
+            final_asr_history.append(committed)
+
+            delta = translation_buffer.get_delta(" ".join(final_asr_history))
+            if delta:
+                translated = translator.translate(delta, src_lang, tgt_lang)
+                final_translation_history.append(translated)
 
     if vad.is_silence_long():
         buffer.buffer = buffer.buffer[:0]
 
-    return live_text, " ".join(final_history)
+    return (
+        live_text,
+        " ".join(final_asr_history),
+        " ".join(final_translation_history),
+    )
 
 
 # ============================================================
-# 🖥️ Unified Gradio UI
+# 🖥️ Unified UI (Interpreter-style)
 # ============================================================
 with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
     gr.Markdown(
         """
-        # 🌍 DubYou — Multilingual Voice Platform
-        Progressive system from **voice identity → real-time speech translation**
+        # 🌍 DubYou — Real-Time Multilingual Voice Translation  
+        **Speak in one language. Be understood in another.**
         """
     )
 
     with gr.Tabs():
 
-        # =========================
-        # Phase 0 TAB
-        # =========================
+        # =====================================================
+        # Phase 0 — Voice Enrollment
+        # =====================================================
         with gr.Tab("Phase 0 — Voice Enrollment"):
             gr.Markdown("### 🎙️ Create Your Voice Identity")
 
@@ -119,77 +135,61 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
                 label="Record your voice (30–45 seconds)"
             )
 
-            enroll_btn = gr.Button("Enroll Voice")
-            enroll_out = gr.Textbox(lines=8)
+            enroll_out = gr.Textbox(lines=7, label="Enrollment Status")
 
-            enroll_btn.click(
+            gr.Button("Enroll Voice").click(
                 phase0_enroll,
-                inputs=mic0,
-                outputs=enroll_out
+                mic0,
+                enroll_out
             )
 
-        # =========================
-        # Phase 1 TAB
-        # =========================
-        with gr.Tab("Phase 1 — Streaming ASR"):
-            gr.Markdown("### 🎧 Live Speech → Text")
+        # =====================================================
+        # Phase 1 + 2 — Translation Interface
+        # =====================================================
+        with gr.Tab("Phase 1 & 2 — Live Translation"):
+            gr.Markdown("### 🎧 Live Speech Translation")
 
-            mic1 = gr.Audio(
+            with gr.Row():
+                src = gr.Dropdown(
+                    ["eng_Latn", "hin_Deva"],
+                    value="eng_Latn",
+                    label="🗣️ Speaker Language"
+                )
+                tgt = gr.Dropdown(
+                    ["hin_Deva", "eng_Latn"],
+                    value="hin_Deva",
+                    label="👂 Listener Language"
+                )
+
+            mic = gr.Audio(
                 sources=["microphone"],
                 type="numpy",
                 streaming=True,
-                label="Speak"
+                label="🎙️ Speak here"
             )
 
-            live_txt = gr.Textbox(label="Live (Unstable)")
-            final_txt = gr.Textbox(label="Final (Committed)")
+            with gr.Row():
+                with gr.Column():
+                    live_txt = gr.Textbox(
+                        label="📝 Live Speech (Unstable)",
+                        lines=4
+                    )
 
-            mic1.stream(
-                phase1_streaming_asr,
-                inputs=mic1,
-                outputs=[live_txt, final_txt]
-            )
+                    final_asr = gr.Textbox(
+                        label="✅ Final Transcription",
+                        lines=6
+                    )
 
-        # =========================
-        # Phase 2 PLACEHOLDER
-        # =========================
-        with gr.Tab("Phase 2 — Streaming Translation"):
-            gr.Markdown(
-                """
-                🚧 **Coming next**
+                with gr.Column():
+                    final_trans = gr.Textbox(
+                        label="🌍 Translated Output",
+                        lines=10
+                    )
 
-                - Streaming text-to-text translation  
-                - Context-aware buffering  
-                - Multilingual support (NLLB / mBART)
-                """
-            )
-
-        # =========================
-        # Phase 3 PLACEHOLDER
-        # =========================
-        with gr.Tab("Phase 3 — Voice Cloning TTS"):
-            gr.Markdown(
-                """
-                🚧 **Coming next**
-
-                - Same voice, different language  
-                - XTTS / VALL-E style cloning  
-                - Speaker embedding reuse
-                """
-            )
-
-        # =========================
-        # Phase 4 PLACEHOLDER
-        # =========================
-        with gr.Tab("Phase 4 — Speech ↔ Speech"):
-            gr.Markdown(
-                """
-                🚧 **Coming next**
-
-                - Person A ↔ Person B  
-                - Bidirectional real-time conversation  
-                - Full S2S pipeline
-                """
+            mic.stream(
+                phase1_and_2_pipeline,
+                inputs=[mic, src, tgt],
+                outputs=[live_txt, final_asr, final_trans]
             )
 
 demo.launch(share=True)
