@@ -1,6 +1,6 @@
 # ============================================================
 # app.py — Unified App (Phase 0 + Phase 1 + Phase 2 + Phase 3)
-# STABLE Gradio Streaming Version
+# Python 3.12 SAFE — Piper TTS
 # ============================================================
 
 import os
@@ -9,7 +9,7 @@ import numpy as np
 import gradio as gr
 
 # ------------------------------------------------------------
-# Fix project root (Colab / Docker / Local safe)
+# Fix project root
 # ------------------------------------------------------------
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -36,10 +36,9 @@ from services.translation.translator import StreamingTranslator
 from services.translation.translation_buffer import TranslationBuffer
 
 # ------------------------------------------------------------
-# Phase 3 — Voice Cloning TTS
+# Phase 3 — TTS (Piper, Python 3.12 safe)
 # ------------------------------------------------------------
-from services.tts.voice_cloner import VoiceCloner
-from services.tts.audio_postprocess import postprocess_wav
+from services.tts.piper_tts import PiperTTS
 
 
 # ============================================================
@@ -51,7 +50,6 @@ def phase0_enroll(audio):
 
     sr, audio_np = audio
 
-    # Convert to mono
     if audio_np.ndim > 1:
         audio_np = audio_np.mean(axis=1)
 
@@ -64,7 +62,7 @@ def phase0_enroll(audio):
     return (
         "✅ Voice enrolled successfully!\n\n"
         f"🆔 USER ID:\n{user_id}\n\n"
-        "Save this ID — it will be reused for voice cloning."
+        "This voice identity will be reused in later phases."
     )
 
 
@@ -78,8 +76,6 @@ committer = PhraseCommitter(min_words=5)
 
 translator = StreamingTranslator()
 translation_buffer = TranslationBuffer()
-
-voice_cloner = VoiceCloner()
 
 final_asr_history = []
 final_translation_history = []
@@ -125,32 +121,21 @@ def phase1_and_2_pipeline(audio, src_lang, tgt_lang):
 
 
 # ============================================================
-# Phase 3 — Voice Cloning TTS Logic
+# Phase 3 — TTS (Piper)
 # ============================================================
-def phase3_tts(user_id, text, lang):
-    if not user_id or not text:
+# NOTE: Replace model paths with ones you download
+piper_en = PiperTTS("models/en_US-amy-medium.onnx")
+piper_hi = PiperTTS("models/hi_IN-voices.onnx")
+
+
+def phase3_tts(text, lang):
+    if not text:
         return None
 
-    ref_path = f"voice_profiles/{user_id}_reference.wav"
-    if not os.path.exists(ref_path):
-        return None
-
-    raw_audio = voice_cloner.synthesize(
-        text=text,
-        reference_wav=ref_path,
-        language=lang
-    )
-
-    if raw_audio is None:
-        return None
-
-    final_audio = postprocess_wav(
-        raw_audio,
-        normalize=True,
-        trim=True
-    )
-
-    return final_audio
+    if lang == "hi":
+        return piper_hi.speak(text)
+    else:
+        return piper_en.speak(text)
 
 
 # ============================================================
@@ -159,8 +144,8 @@ def phase3_tts(user_id, text, lang):
 with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
     gr.Markdown(
         """
-        # 🌍 DubYou — Real-Time Multilingual Voice Platform  
-        **Speak naturally. Be understood instantly. Speak back in your own voice.**
+        # 🌍 DubYou — Multilingual Voice Platform  
+        **Understand. Translate. Speak back.**
         """
     )
 
@@ -212,16 +197,16 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
                 type="numpy",
                 streaming=True,
                 format="wav",
-                label="🎙️ Speak here"
+                label="🎙️ Speak"
             )
 
             with gr.Row():
                 with gr.Column():
-                    live_txt = gr.Textbox(label="📝 Live ASR (Unstable)", lines=4)
-                    final_asr = gr.Textbox(label="✅ Final Transcription", lines=6)
+                    live_txt = gr.Textbox(label="Live ASR (Unstable)", lines=4)
+                    final_asr = gr.Textbox(label="Final ASR", lines=6)
 
                 with gr.Column():
-                    final_trans = gr.Textbox(label="🌍 Translated Text", lines=10)
+                    final_trans = gr.Textbox(label="Translated Text", lines=10)
 
             mic.stream(
                 phase1_and_2_pipeline,
@@ -230,33 +215,28 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
             )
 
         # =====================================================
-        # Phase 3 — Voice Cloning TTS
+        # Phase 3 — Text to Speech
         # =====================================================
-        with gr.Tab("Phase 3 — Voice Cloning TTS"):
-            gr.Markdown("### 🔊 Same Voice, Different Language")
-
-            user_id_input = gr.Textbox(
-                label="🆔 User ID (from Phase 0)",
-                placeholder="Paste your enrolled user ID"
-            )
+        with gr.Tab("Phase 3 — Text to Speech"):
+            gr.Markdown("### 🔊 Speak the Translation")
 
             tts_lang = gr.Dropdown(
                 ["en", "hi"],
                 value="hi",
-                label="🎯 Output Language"
+                label="Output Language"
             )
 
             tts_text = gr.Textbox(
-                label="📝 Text to Speak",
+                label="Text to Speak",
                 value=lambda: " ".join(final_translation_history),
                 lines=4
             )
 
-            tts_audio = gr.Audio(label="🔊 Cloned Voice Output")
+            tts_audio = gr.Audio(label="Generated Speech")
 
-            gr.Button("Generate Voice").click(
+            gr.Button("Generate Speech").click(
                 phase3_tts,
-                inputs=[user_id_input, tts_text, tts_lang],
+                inputs=[tts_text, tts_lang],
                 outputs=tts_audio
             )
 
