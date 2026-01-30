@@ -34,7 +34,7 @@ from services.asr.phrase_committer import PhraseCommitter
 # ------------------------------------------------------------
 from services.translation.translator import StreamingTranslator
 from services.translation.translation_buffer import TranslationBuffer
-
+from services.tts.voice_cloner import VoiceCloner
 
 # ============================================================
 # Phase 0 Logic — Voice Enrollment
