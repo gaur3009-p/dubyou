@@ -7,6 +7,6 @@ silero-vad
 
 numpy
 soundfile
-
+piper-tts
 gradio
 faster-whisper
