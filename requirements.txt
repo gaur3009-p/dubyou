@@ -2,7 +2,6 @@ torch
 torchaudio
 
 speechbrain
-TTS>=0.22.0
 silero-vad
 
 numpy
