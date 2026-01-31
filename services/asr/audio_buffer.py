@@ -1,31 +1,34 @@
-import torch
-import torchaudio
 import numpy as np
 
 
 class AudioBuffer:
-    def __init__(self, target_sr=16000, max_seconds=5):
-        self.target_sr = target_sr
-        self.max_len = target_sr * max_seconds
-        self.buffer = torch.zeros(0)
+    def __init__(self, max_seconds=10, sample_rate=16000):
+        self.sample_rate = sample_rate
+        self.max_samples = int(max_seconds * sample_rate)
+        self.buffer = np.zeros(0, dtype=np.float32)
 
-    def add(self, audio_np, sr):
-        # Convert to torch
-        audio = torch.tensor(audio_np)
+    def add(self, chunk: np.ndarray, sr: int):
+        """
+        Add audio chunk to buffer (assumes sr already correct)
+        """
+        self.buffer = np.concatenate([self.buffer, chunk])
 
-        # Resample if needed
-        if sr != self.target_sr:
-            resampler = torchaudio.transforms.Resample(
-                orig_freq=sr,
-                new_freq=self.target_sr
-            )
-            audio = resampler(audio.unsqueeze(0)).squeeze(0)
+        if len(self.buffer) > self.max_samples:
+            self.buffer = self.buffer[-self.max_samples:]
 
-        # Append
-        self.buffer = torch.cat([self.buffer, audio])
+        return self.buffer
 
-        # Trim buffer
-        if len(self.buffer) > self.max_len:
-            self.buffer = self.buffer[-self.max_len:]
+    def get_recent(self, seconds: float):
+        """
+        Get last N seconds of audio (for live ASR only)
+        """
+        samples = int(seconds * self.sample_rate)
+        return self.buffer[-samples:]
 
-        return self.buffer.numpy()
+    def flush(self):
+        """
+        Return full utterance and reset buffer
+        """
+        audio = self.buffer.copy()
+        self.buffer = np.zeros(0, dtype=np.float32)
+        return audio
