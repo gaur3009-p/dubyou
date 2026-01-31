@@ -94,31 +94,33 @@ def phase1_and_2_pipeline(audio, src_lang, tgt_lang):
     chunk = chunk.astype("float32")
 
     is_speech = vad.is_speech(chunk)
-    audio_np = buffer.add(chunk, sr)
+    buffer.add(chunk, sr)
 
     live_text = ""
 
+    # LIVE ASR (short window)
     if is_speech:
-        live_text = asr.transcribe(audio_np)
+        live_audio = buffer.get_recent(seconds=1.5)
+        live_text = asr.transcribe(live_audio)
 
-        committed = committer.process(live_text)
-        if committed:
-            final_asr_history.append(committed)
+    # FINAL ASR (commit on silence)
+    if vad.is_silence_long():
+        full_audio = buffer.flush()
+        final_text = asr.transcribe(full_audio)
+
+        if final_text.strip():
+            final_asr_history.append(final_text)
 
             delta = translation_buffer.get_delta(" ".join(final_asr_history))
             if delta:
                 translated = translator.translate(delta, src_lang, tgt_lang)
                 final_translation_history.append(translated)
 
-    if vad.is_silence_long():
-        buffer.buffer = buffer.buffer[:0]
-
     return (
         live_text,
         " ".join(final_asr_history),
         " ".join(final_translation_history),
     )
-
 
 # ============================================================
 # Phase 3 — TTS (Piper)
