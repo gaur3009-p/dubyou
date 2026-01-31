@@ -1,20 +1,24 @@
 from faster_whisper import WhisperModel
-import numpy as np
 
 
 class StreamingASR:
-    def __init__(self, model_size="large-v3"):
+    def __init__(self):
         self.model = WhisperModel(
-            model_size,
+            "large-v3",
             device="cuda",
             compute_type="float16"
         )
 
-    def transcribe(self, audio_np, language="en"):
+    def transcribe(self, audio_np):
+        if audio_np is None or len(audio_np) < 1600:
+            return ""
+
         segments, _ = self.model.transcribe(
             audio_np,
-            language=language,
+            language="en",
             vad_filter=False,
+            condition_on_previous_text=False,
             beam_size=1
         )
+
         return " ".join(seg.text.strip() for seg in segments)
