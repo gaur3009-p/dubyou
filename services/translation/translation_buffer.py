@@ -1,16 +1,15 @@
 class TranslationBuffer:
     def __init__(self):
-        self.last_source = ""
+        self.last_text = ""
 
-    def get_delta(self, new_text: str) -> str | None:
-        if not new_text.startswith(self.last_source):
-            # ASR rewrite or reset
-            self.last_source = ""
+    def get_delta(self, new_text):
+        if not new_text.startswith(self.last_text):
+            self.last_text = ""
             return None
 
-        delta = new_text[len(self.last_source):].strip()
+        delta = new_text[len(self.last_text):].strip()
         if not delta:
             return None
 
-        self.last_source = new_text
+        self.last_text = new_text
         return delta
