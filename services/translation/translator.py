@@ -1,7 +1,13 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+class EmotionAwareTranslator:
+    def translate(self, text, src_lang, tgt_lang, emotion):
+        prompt = (
+            f"Translate to Hindi preserving emotion ({emotion}). "
+            f"Do not change tone.\nText: {text}"
+        )
 
-
+        return base_translate(prompt, src_lang, tgt_lang)
 class StreamingTranslator:
     def __init__(self, model_name="facebook/nllb-200-distilled-600M"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
