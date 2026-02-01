@@ -1,7 +1,3 @@
-# ============================================================
-# vad_gate.py — Simple, robust energy-based VAD
-# ============================================================
-
 import numpy as np
 import time
 
@@ -12,12 +8,12 @@ class VadGate:
         self.silence_time = silence_time
         self.last_voice_time = time.time()
 
-    def is_speech(self, chunk: np.ndarray) -> bool:
-        energy = np.sqrt(np.mean(chunk ** 2))
-        if energy > self.threshold:
+    def is_speech(self, chunk: np.ndarray):
+        rms = np.sqrt(np.mean(chunk ** 2))
+        if rms > self.threshold:
             self.last_voice_time = time.time()
             return True
         return False
 
-    def is_silence_long(self) -> bool:
+    def should_flush(self):
         return (time.time() - self.last_voice_time) > self.silence_time
