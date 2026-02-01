@@ -1,6 +1,6 @@
 # ============================================================
-# app.py — Unified App (Phase 0 + 1 + 2 + 3)
-# Python 3.12 SAFE
+# app.py — Unified App (Phase 0 + Phase 1 + Phase 2 + Phase 3)
+# UPDATED — Streaming, Emotion-Preserved, Cross-Lingual
 # ============================================================
 
 import os
@@ -16,52 +16,51 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# ------------------------------------------------------------
-# Phase 0 — Voice Identity
-# ------------------------------------------------------------
+# ============================================================
+# Phase 0 — Voice Enrollment
+# ============================================================
 from services.voice_identity.capture.prompts import VOICE_PROMPTS
 from services.voice_identity.interface import enroll_voice
 
-# ------------------------------------------------------------
-# Phase 1 — Streaming ASR
-# ------------------------------------------------------------
+# ============================================================
+# Phase 1–3 — Core Services
+# ============================================================
 from services.asr.audio_buffer import AudioBuffer
 from services.asr.vad_gate import VadGate
 from services.asr.streaming_asr import StreamingASR
 from services.asr.phrase_committer import PhraseCommitter
 
-# ------------------------------------------------------------
-# Phase 2 — Streaming Translation
-# ------------------------------------------------------------
-from services.translation.translator import StreamingTranslator
-from services.translation.translation_buffer import TranslationBuffer
+from services.translation.emotion import EmotionDetector
+from services.translation.translator import EmotionAwareTranslator
 
-# ------------------------------------------------------------
-# Phase 3 — Speaker-conditioned TTS
-# ------------------------------------------------------------
-from services.tts.speecht5_tts import SpeechT5TTS
-from services.voice_identity.storage.load_embedding import load_embedding
+from services.tts.voice_cloner import VoiceCloner
+
+# ============================================================
+# SESSION STORE (per user)
+# ============================================================
+SESSIONS = {}
+
+
+def get_session(user_id: str):
+    if user_id not in SESSIONS:
+        SESSIONS[user_id] = {
+            "buffer": AudioBuffer(max_seconds=5),
+            "vad": VadGate(),
+            "asr": StreamingASR(),
+            "committer": PhraseCommitter(min_words=4),
+            "emotion": EmotionDetector(),
+            "translator": EmotionAwareTranslator(),
+            "tts": VoiceCloner(user_id),
+
+            # ---- Streaming state ----
+            "last_live_asr": "",
+            "last_translation": ""
+        }
+    return SESSIONS[user_id]
 
 
 # ============================================================
-# GLOBAL STATE (SAFE + EXPLICIT)
-# ============================================================
-audio_buffer = AudioBuffer()
-vad = VadGate()
-asr = StreamingASR()
-committer = PhraseCommitter(min_words=5)
-
-translator = StreamingTranslator()
-translation_buffer = TranslationBuffer()
-
-tts_engine = SpeechT5TTS()
-
-final_asr_history: list[str] = []
-final_translation_history: list[str] = []
-
-
-# ============================================================
-# Phase 0 — Voice Enrollment Logic
+# Phase 0 — Enrollment Callback
 # ============================================================
 def phase0_enroll(audio):
     if audio is None:
@@ -73,7 +72,6 @@ def phase0_enroll(audio):
         audio_np = audio_np.mean(axis=1)
 
     audio_np = audio_np.astype("float32")
-
     user_id = str(uuid.uuid4())[:8]
 
     try:
@@ -82,110 +80,110 @@ def phase0_enroll(audio):
         return f"❌ Enrollment failed:\n{str(e)}"
 
     return (
-        "✅ Voice identity enrolled successfully!\n\n"
-        f"🆔 USER ID:\n{user_id}\n\n"
-        "Save this ID — it will be used for voice cloning in Phase 3."
+        "✅ Voice enrolled successfully!\n\n"
+        f"🆔 USER ID: {user_id}\n\n"
+        "Your English voice will now be used to speak Hindi\n"
+        "with emotion preserved."
     )
 
 
 # ============================================================
-# Phase 1 + 2 — Streaming ASR + Translation
+# Phase 1–3 — STREAMING PIPELINE (THIS IS THE CODE YOU ASKED ABOUT)
 # ============================================================
-def phase1_and_2_pipeline(audio, src_lang, tgt_lang):
-    global final_asr_history, final_translation_history
+def streaming_pipeline(audio, user_id):
+    """
+    This function CONTAINS the UPDATED STREAMING PIPELINE.
+    It is called repeatedly by gr.Audio(streaming=True)
+    """
 
-    if audio is None:
-        return "", " ".join(final_asr_history), " ".join(final_translation_history)
+    if not user_id or audio is None:
+        return "", "", None
 
     sr, chunk = audio
     chunk = chunk.astype("float32")
 
-    # Voice activity detection
-    speaking = vad.is_speech(chunk)
+    session = get_session(user_id)
 
-    # Add audio to rolling buffer
-    buffered_audio = audio_buffer.add(chunk, sr)
+    # 1️⃣ Always buffer audio
+    session["buffer"].add(chunk, sr)
 
-    live_text = ""
+    # 2️⃣ Voice activity detection
+    if session["vad"].is_speech(chunk):
 
-    if speaking and buffered_audio is not None:
-        # Live unstable transcription
-        live_text = asr.transcribe(buffered_audio)
+        # Sliding window ASR (last 3 seconds)
+        live_text = session["asr"].transcribe(
+            session["buffer"].get_recent(3)
+        )
 
-        committed = committer.process(live_text)
-        if committed:
-            final_asr_history.append(committed)
+        session["last_live_asr"] = live_text
 
-            delta = translation_buffer.get_delta(
-                " ".join(final_asr_history)
+        # Commit stable phrase
+        phrase = session["committer"].process(live_text)
+
+        if phrase:
+            # Emotion detection
+            emotion = session["emotion"].detect(phrase)
+
+            # Emotion-aware translation (EN → HI)
+            hindi_text = session["translator"].translate(
+                phrase,
+                src_lang="eng_Latn",
+                tgt_lang="hin_Deva",
+                emotion=emotion
             )
 
-            if delta:
-                translated = translator.translate(
-                    delta,
-                    src_lang,
-                    tgt_lang
-                )
-                final_translation_history.append(translated)
+            session["last_translation"] = hindi_text
 
-    # Reset buffer after long silence
-    if vad.is_silence_long():
-        audio_buffer.reset()
+            # Streaming TTS (Hindi spoken in YOUR English voice)
+            audio_chunk = session["tts"].speak_chunk(
+                hindi_text,
+                emotion=emotion
+            )
+
+            return (
+                session["last_live_asr"],
+                session["last_translation"],
+                audio_chunk
+            )
+
+    # 3️⃣ Handle silence → flush buffer
+    if session["vad"].should_flush():
+        session["buffer"].reset()
 
     return (
-        live_text,
-        " ".join(final_asr_history),
-        " ".join(final_translation_history),
+        session["last_live_asr"],
+        session["last_translation"],
+        None
     )
-
-
-# ============================================================
-# Phase 3 — Voice-Cloned TTS
-# ============================================================
-def phase3_tts(user_id, text):
-    if not user_id or not text.strip():
-        return None
-
-    try:
-        speaker_embedding = load_embedding(user_id)
-    except Exception:
-        return None
-
-    return tts_engine.speak(text, speaker_embedding)
 
 
 # ============================================================
 # UI — Gradio App
 # ============================================================
-with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
+with gr.Blocks(title="DubYou — Real-Time Voice Translation") as demo:
+
     gr.Markdown(
         """
-        # 🌍 DubYou — Real-Time Multilingual Voice Platform  
-        Speak naturally. Be understood instantly.
+        # 🌍 DubYou — Real-Time Voice Translation  
+        Speak English → Hear Hindi in **your own voice**
         """
     )
 
     with gr.Tabs():
 
-        # -----------------------------------------------------
-        # Phase 0 Tab
-        # -----------------------------------------------------
-        with gr.Tab("Phase 0 — Voice Identity"):
-            gr.Markdown("### 🎙️ Voice Enrollment")
+        # ---------------- Phase 0 ----------------
+        with gr.Tab("Phase 0 — Voice Enrollment"):
+            gr.Markdown("### 🎙️ Record 30–60 seconds of clean English speech")
 
             for p in VOICE_PROMPTS:
                 gr.Markdown(f"- {p}")
 
             mic0 = gr.Audio(
                 sources=["microphone"],
-                type="numpy",
-                label="Record 30–60 seconds of clean speech"
+                type="numpy"
             )
 
-            enroll_out = gr.Textbox(
-                label="Enrollment Result",
-                lines=8
-            )
+            enroll_out = gr.Textbox(lines=8)
 
             gr.Button("Enroll Voice").click(
                 phase0_enroll,
@@ -193,63 +191,38 @@ with gr.Blocks(title="DubYou — Multilingual Voice Platform") as demo:
                 enroll_out
             )
 
-        # -----------------------------------------------------
-        # Phase 1 + 2 Tab
-        # -----------------------------------------------------
-        with gr.Tab("Phase 1 & 2 — Live Translation"):
-            gr.Markdown("### 🎧 Interpreter Mode")
-
-            with gr.Row():
-                src = gr.Dropdown(
-                    ["eng_Latn", "hin_Deva"],
-                    value="eng_Latn",
-                    label="Speaker Language"
-                )
-                tgt = gr.Dropdown(
-                    ["hin_Deva", "eng_Latn"],
-                    value="hin_Deva",
-                    label="Listener Language"
-                )
+        # ---------------- Phase 1–3 ----------------
+        with gr.Tab("Phase 1–3 — Live Translation"):
+            user_id_input = gr.Textbox(
+                label="User ID (from Phase 0)"
+            )
 
             mic = gr.Audio(
                 sources=["microphone"],
                 type="numpy",
                 streaming=True,
-                label="Speak"
+                label="Speak English"
             )
 
-            live_txt = gr.Textbox(label="Live ASR (Unstable)", lines=4)
-            final_asr = gr.Textbox(label="Final Transcription", lines=6)
-            final_trans = gr.Textbox(label="Translated Text", lines=8)
-
-            mic.stream(
-                phase1_and_2_pipeline,
-                inputs=[mic, src, tgt],
-                outputs=[live_txt, final_asr, final_trans]
+            live_asr = gr.Textbox(
+                label="Live ASR (English)",
+                lines=3
             )
 
-        # -----------------------------------------------------
-        # Phase 3 Tab
-        # -----------------------------------------------------
-        with gr.Tab("Phase 3 — Voice-Cloned TTS"):
-            gr.Markdown("### 🔊 Speak in Your Own Voice")
-
-            user_id_input = gr.Textbox(
-                label="User ID (from Phase 0)"
-            )
-
-            tts_text = gr.Textbox(
-                label="Text to Speak",
-                value=lambda: " ".join(final_translation_history),
+            translated_txt = gr.Textbox(
+                label="Translated Text (Hindi)",
                 lines=4
             )
 
-            tts_audio = gr.Audio(label="Generated Speech")
+            tts_audio = gr.Audio(
+                label="Hindi Speech (Your Voice)",
+                autoplay=True
+            )
 
-            gr.Button("Generate Speech").click(
-                phase3_tts,
-                inputs=[user_id_input, tts_text],
-                outputs=tts_audio
+            mic.stream(
+                streaming_pipeline,
+                inputs=[mic, user_id_input],
+                outputs=[live_asr, translated_txt, tts_audio]
             )
 
 demo.launch(share=True)
