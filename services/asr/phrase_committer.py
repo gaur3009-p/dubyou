@@ -1,20 +1,18 @@
 class PhraseCommitter:
-    def __init__(self, min_words=5):
+    def __init__(self, min_words=4):
         self.min_words = min_words
-        self.last_committed = ""
+        self.last_tokens = []
 
     def process(self, live_text: str):
-        # Whisper may rewrite earlier tokens
-        if not live_text.startswith(self.last_committed):
-            self.last_committed = ""
+        tokens = live_text.strip().split()
+
+        if len(tokens) <= len(self.last_tokens):
             return None
 
-        delta = live_text[len(self.last_committed):].strip()
-        words = delta.split()
+        delta = tokens[len(self.last_tokens):]
 
-        if len(words) >= self.min_words:
-            phrase = " ".join(words)
-            self.last_committed = live_text
-            return phrase
+        if len(delta) >= self.min_words:
+            self.last_tokens = tokens
+            return " ".join(delta)
 
         return None
